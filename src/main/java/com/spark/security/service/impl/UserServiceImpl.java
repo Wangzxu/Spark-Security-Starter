@@ -10,8 +10,10 @@ import com.spark.security.mapper.UserMapper;
 import com.spark.security.security.UserDetailsImpl;
 import com.spark.security.service.UserService;
 import com.spark.security.utils.JwtUtils;
+import com.spark.security.utils.RedisUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -32,6 +34,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     private final PasswordEncoder passwordEncoder;
     private final JwtUtils jwtUtils;
     private final AuthenticationManager authenticationManager;
+    private final RedisUtils redisUtils;
+
+    @Value("${jwt.refresh-expiration}")
+    private long refreshExpiration;
 
     @Override
     public AuthResponse register(RegisterRequest request) {
@@ -58,12 +64,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         userMapper.insert(user);
         log.info("新用户信息保存成功，用户名: {}", user.getUsername());
         
-        // 生成 Token
-        log.debug("正在为用户 [{}] 生成 JWT Token...", user.getUsername());
-        String jwtToken = jwtUtils.generateToken(new UserDetailsImpl(user));
-        
-        log.info("用户 [{}] 注册流程完成", user.getUsername());
-        return AuthResponse.builder().token(jwtToken).build();
+        return generateTokensAndSave(user);
     }
 
     @Override
@@ -93,10 +94,67 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             throw new RuntimeException("用户不存在");
         }
         
-        log.debug("正在为用户 [{}] 生成登录 JWT Token...", user.getUsername());
-        String jwtToken = jwtUtils.generateToken(new UserDetailsImpl(user));
+        return generateTokensAndSave(user);
+    }
+
+    @Override
+    public AuthResponse refreshToken(String refreshToken) {
+        log.info("开始处理刷新 Token 请求");
+
+        // 1. 从 Token 中提取用户名
+        String username = null;
+        try {
+            username = jwtUtils.extractUsername(refreshToken);
+        } catch (Exception e) {
+            log.warn("提取 refreshToken 的 username 失败: {}", e.getMessage());
+            throw new RuntimeException("无效的 Refresh Token");
+        }
+
+        if (username == null) {
+            throw new RuntimeException("无效的 Refresh Token");
+        }
+
+        // 2. 检查 Redis 中该用户的 Refresh Token 是否存在并且匹配
+        String redisKey = "refresh_token:" + username;
+        Object cachedToken = redisUtils.get(redisKey);
         
-        log.info("用户 [{}] 登录成功", user.getUsername());
-        return AuthResponse.builder().token(jwtToken).build();
+        if (cachedToken == null || !cachedToken.equals(refreshToken)) {
+            log.warn("Redis 中未找到匹配的 Refresh Token 或已过期，用户名: {}", username);
+            throw new RuntimeException("Refresh Token 已过期或被撤销，请重新登录");
+        }
+
+        // 3. 从数据库中获取最新的用户信息
+        User user = userMapper.selectOne(new LambdaQueryWrapper<User>()
+                .eq(User::getUsername, username));
+
+        if (user == null) {
+            throw new RuntimeException("用户不存在");
+        }
+
+        // 4. 重新生成并返回新的 Tokens
+        return generateTokensAndSave(user);
+    }
+
+    /**
+     * 生成 AccessToken 和 RefreshToken，并将 RefreshToken 保存到 Redis
+     */
+    private AuthResponse generateTokensAndSave(User user) {
+        UserDetailsImpl userDetails = new UserDetailsImpl(user);
+        
+        log.debug("正在为用户 [{}] 生成 JWT Tokens...", user.getUsername());
+        String accessToken = jwtUtils.generateToken(userDetails);
+        String refreshToken = jwtUtils.generateRefreshToken(userDetails);
+        
+        // 保存 RefreshToken 到 Redis
+        String redisKey = "refresh_token:" + user.getUsername();
+        // 将毫秒转换为秒
+        redisUtils.set(redisKey, refreshToken, refreshExpiration / 1000);
+        
+        log.info("用户 [{}] Token 生成并保存成功", user.getUsername());
+        
+        return AuthResponse.builder()
+                .accessToken(accessToken)
+                .refreshToken(refreshToken)
+                .build();
     }
 }

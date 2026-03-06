@@ -59,4 +59,22 @@ public class AuthController {
             return Result.error(401, "用户名或密码错误");
         }
     }
+
+    /**
+     * 刷新 Token 接口
+     * @param request 刷新 Token 请求信息
+     * @return 刷新结果
+     */
+    @PostMapping("/refresh")
+    public Result<AuthResponse> refreshToken(@RequestBody com.spark.security.dto.RefreshTokenRequest request) {
+        log.info("收到刷新 Token 请求");
+        try {
+            AuthResponse response = userService.refreshToken(request.getRefreshToken());
+            log.info("刷新 Token 请求处理成功");
+            return Result.success(response);
+        } catch (Exception e) {
+            log.error("刷新 Token 请求处理失败，原因: {}", e.getMessage());
+            return Result.error(401, e.getMessage());
+        }
+    }
 }

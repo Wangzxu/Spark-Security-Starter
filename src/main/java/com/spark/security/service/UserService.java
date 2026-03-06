@@ -31,4 +31,13 @@ public interface UserService extends IService<User> {
      * @throws org.springframework.security.core.AuthenticationException 如果认证失败则抛出异常
      */
     AuthResponse login(LoginRequest request);
+
+    /**
+     * 刷新 Token
+     * 根据传入的 refreshToken 重新生成新的 accessToken 和 refreshToken
+     * 
+     * @param refreshToken 请求刷新的 Token
+     * @return 包含新 Token 的认证响应
+     */
+    AuthResponse refreshToken(String refreshToken);
 }

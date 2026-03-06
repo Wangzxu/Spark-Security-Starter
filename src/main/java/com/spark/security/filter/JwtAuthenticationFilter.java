@@ -1,6 +1,8 @@
 package com.spark.security.filter;
 
+import com.spark.security.security.UserDetailsImpl;
 import com.spark.security.utils.JwtUtils;
+import com.spark.security.utils.UserContext;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -32,7 +34,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     ) throws ServletException, IOException {
         final String authHeader = request.getHeader("Authorization");
         final String jwt;
-        final String username;
+        String username = null;
         
         // 当 Header 中没有以 Bearer 开头的 Authorization 时直接放行
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
@@ -42,27 +44,49 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         
         // 提取 JWT
         jwt = authHeader.substring(7);
-        // 从 JWT 中提取用户名
-        username = jwtUtils.extractUsername(jwt);
         
-        // 当获取到了用户名并且尚未通过认证时
-        if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-            UserDetails userDetails = this.userDetailsService.loadUserByUsername(username);
-            
-            // 验证 Token 是否有效
-            if (jwtUtils.isTokenValid(jwt, userDetails)) {
-                UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
-                        userDetails,
-                        null,
-                        userDetails.getAuthorities()
-                );
-                authToken.setDetails(
-                        new WebAuthenticationDetailsSource().buildDetails(request)
-                );
-                // 更新 SecurityContextHolder
-                SecurityContextHolder.getContext().setAuthentication(authToken);
+        try {
+            // 从 JWT 中提取用户名
+            username = jwtUtils.extractUsername(jwt);
+
+            // 当获取到了用户名并且尚未通过认证时
+            if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+                UserDetails userDetails = this.userDetailsService.loadUserByUsername(username);
+
+                // 验证 Token 是否有效
+                if (jwtUtils.isTokenValid(jwt, userDetails)) {
+                    UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
+                            userDetails,
+                            null,
+                            userDetails.getAuthorities()
+                    );
+                    authToken.setDetails(
+                            new WebAuthenticationDetailsSource().buildDetails(request)
+                    );
+                    // 更新 SecurityContextHolder
+                    SecurityContextHolder.getContext().setAuthentication(authToken);
+
+                    // 将UserDetails强转为我的实现类
+                    if(userDetails instanceof UserDetailsImpl) {
+                        // 存入用户信息
+                        Long userId = ((UserDetailsImpl) userDetails).getUser().getId();
+                        String userName = ((UserDetailsImpl) userDetails).getUser().getUsername();
+                        UserContext.setUserInfo(userId, userName);
+                    }
+                }
             }
+            filterChain.doFilter(request, response);
+        } catch (io.jsonwebtoken.ExpiredJwtException e) {
+            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+            response.setContentType("application/json;charset=utf-8");
+            response.getWriter().write("{\"code\":401,\"message\":\"Token已过期，请使用RefreshToken刷新或重新登录\",\"data\":null}");
+        } catch (Exception e) {
+            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+            response.setContentType("application/json;charset=utf-8");
+            response.getWriter().write("{\"code\":401,\"message\":\"无效的Token\",\"data\":null}");
+        } finally {
+            // 清理ThreadLocal
+            UserContext.clear();
         }
-        filterChain.doFilter(request, response);
     }
 }
