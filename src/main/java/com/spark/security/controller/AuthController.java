@@ -77,4 +77,27 @@ public class AuthController {
             return Result.error(401, e.getMessage());
         }
     }
+
+    /**
+     * 退出登录接口
+     * @param request 退出请求信息
+     * @param authHeader 请求头中的 Authorization
+     * @return 退出结果
+     */
+    @PostMapping("/logout")
+    public Result<Void> logout(@RequestBody com.spark.security.dto.RefreshTokenRequest request, 
+                               @org.springframework.web.bind.annotation.RequestHeader(value = "Authorization", required = false) String authHeader) {
+        log.info("收到用户退出登录请求");
+        try {
+            String accessToken = null;
+            if (authHeader != null && authHeader.startsWith("Bearer ")) {
+                accessToken = authHeader.substring(7);
+            }
+            userService.logout(accessToken, request.getRefreshToken());
+            return Result.success();
+        } catch (Exception e) {
+            log.error("退出登录请求处理失败，原因: {}", e.getMessage());
+            return Result.error(500, "退出登录失败");
+        }
+    }
 }

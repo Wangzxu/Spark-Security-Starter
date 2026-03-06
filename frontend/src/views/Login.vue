@@ -59,7 +59,8 @@ const handleLogin = async () => {
         const res = await request.post('/auth/login', loginForm)
         if (res.code === 200) {
           ElMessage.success('Login successful')
-          localStorage.setItem('token', res.data.token)
+          localStorage.setItem('accessToken', res.data.accessToken)
+          localStorage.setItem('refreshToken', res.data.refreshToken)
           // Store user info if necessary
           if (res.data.user) {
              localStorage.setItem('user', JSON.stringify(res.data.user))

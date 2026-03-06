@@ -21,6 +21,8 @@ public class User {
     
     private Integer status; // 1: 正常, 0: 禁用
     
+    private Long pv; // 密码版本号
+    
     private LocalDateTime createTime;
     
     private LocalDateTime updateTime;

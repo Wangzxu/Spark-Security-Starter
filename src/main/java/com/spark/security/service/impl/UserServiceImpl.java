@@ -35,6 +35,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
     private final JwtUtils jwtUtils;
     private final AuthenticationManager authenticationManager;
     private final RedisUtils redisUtils;
+    private final com.spark.security.service.BlacklistService blacklistService;
 
     @Value("${jwt.refresh-expiration}")
     private long refreshExpiration;
@@ -57,6 +58,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         user.setPassword(passwordEncoder.encode(request.getPassword()));
         user.setNickname(request.getNickname());
         user.setStatus(1);
+        user.setPv(1L);
         user.setCreateTime(LocalDateTime.now());
         user.setUpdateTime(LocalDateTime.now());
 
@@ -135,14 +137,76 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         return generateTokensAndSave(user);
     }
 
+    @Override
+    public void logout(String accessToken, String refreshToken) {
+        log.info("开始处理用户登出请求");
+
+        if (accessToken != null && !accessToken.isEmpty()) {
+            blacklistService.banToken(accessToken);
+        }
+
+        if (refreshToken == null || refreshToken.isEmpty()) {
+            return;
+        }
+
+        try {
+            // 从 Token 中提取用户名
+            String username = jwtUtils.extractUsername(refreshToken);
+            if (username != null) {
+                // 删除 Redis 中的 Token
+                String redisKey = "refresh_token:" + username;
+                redisUtils.del(redisKey);
+                log.info("用户 [{}] 登出成功，已清除 Redis 中的 Refresh Token", username);
+            }
+        } catch (Exception e) {
+            log.warn("登出时提取 refreshToken 的 username 失败: {}", e.getMessage());
+            // 忽略异常，确保登出流程顺利完成
+        }
+    }
+
+    @Override
+    public void changePassword(com.spark.security.dto.ChangePasswordRequest request) {
+        Long userId = com.spark.security.utils.UserContext.getUserId();
+        if (userId == null) {
+            throw new RuntimeException("用户未登录");
+        }
+
+        User user = userMapper.selectById(userId);
+        if (user == null) {
+            throw new RuntimeException("用户不存在");
+        }
+
+        // 校验旧密码
+        if (!passwordEncoder.matches(request.getOldPassword(), user.getPassword())) {
+            throw new RuntimeException("旧密码错误");
+        }
+
+        // 更新密码和版本号
+        user.setPassword(passwordEncoder.encode(request.getNewPassword()));
+        user.setPv((user.getPv() == null ? 1L : user.getPv()) + 1L);
+        user.setUpdateTime(LocalDateTime.now());
+        userMapper.updateById(user);
+
+        // 删除 Redis 中的 Refresh Token，使所有设备强制下线（需要重新登录获取新Token）
+        String redisKey = "refresh_token:" + user.getUsername();
+        redisUtils.del(redisKey);
+        log.info("用户 [{}] 修改密码成功，版本号已更新为 {}，已清除所有 Refresh Token", user.getUsername(), user.getPv());
+    }
+
     /**
      * 生成 AccessToken 和 RefreshToken，并将 RefreshToken 保存到 Redis
      */
     private AuthResponse generateTokensAndSave(User user) {
         UserDetailsImpl userDetails = new UserDetailsImpl(user);
         
+        Long pv = user.getPv() != null ? user.getPv() : 1L;
+
+        java.util.Map<String, Object> extraClaims = new java.util.HashMap<>();
+        extraClaims.put("pv", pv);
+
         log.debug("正在为用户 [{}] 生成 JWT Tokens...", user.getUsername());
-        String accessToken = jwtUtils.generateToken(userDetails);
+        // 生成包含 pv 的 AccessToken
+        String accessToken = jwtUtils.generateToken(extraClaims, userDetails);
         String refreshToken = jwtUtils.generateRefreshToken(userDetails);
         
         // 保存 RefreshToken 到 Redis
@@ -150,7 +214,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         // 将毫秒转换为秒
         redisUtils.set(redisKey, refreshToken, refreshExpiration / 1000);
         
-        log.info("用户 [{}] Token 生成并保存成功", user.getUsername());
+        log.info("用户 [{}] Token 生成并保存成功，当前版本号: {}", user.getUsername(), pv);
         
         return AuthResponse.builder()
                 .accessToken(accessToken)

@@ -37,6 +37,14 @@ public class JwtUtils {
         return claimsResolver.apply(claims);
     }
 
+    public Long extractPv(String token) {
+        Object pv = extractAllClaims(token).get("pv");
+        if (pv instanceof Number) {
+            return ((Number) pv).longValue();
+        }
+        return null;
+    }
+
     public String generateToken(UserDetails userDetails) {
         return generateToken(new HashMap<>(), userDetails);
     }
@@ -68,7 +76,7 @@ public class JwtUtils {
         return extractExpiration(token).before(new Date());
     }
 
-    private Date extractExpiration(String token) {
+    public Date extractExpiration(String token) {
         return extractClaim(token, Claims::getExpiration);
     }
 

@@ -2,6 +2,7 @@ package com.spark.security.filter;
 
 import com.spark.security.security.UserDetailsImpl;
 import com.spark.security.utils.JwtUtils;
+import com.spark.security.utils.RedisUtils;
 import com.spark.security.utils.UserContext;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -25,6 +26,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtUtils jwtUtils;
     private final UserDetailsService userDetailsService;
+    private final RedisUtils redisUtils;
 
     @Override
     protected void doFilterInternal(
@@ -44,6 +46,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         
         // 提取 JWT
         jwt = authHeader.substring(7);
+
+        // 1. 检查 Token 是否在黑名单中
+        if (redisUtils.hasKey("blacklist:token:" + jwt)) {
+            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+            response.setContentType("application/json;charset=utf-8");
+            response.getWriter().write("{\"code\":401,\"message\":\"此Token已被拉黑，请重新登录\",\"data\":null}");
+            return;
+        }
         
         try {
             // 从 JWT 中提取用户名
@@ -52,6 +62,31 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             // 当获取到了用户名并且尚未通过认证时
             if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
                 UserDetails userDetails = this.userDetailsService.loadUserByUsername(username);
+
+                // 2. 检查用户是否被封禁 (状态为 0)
+                if (!userDetails.isEnabled()) {
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    response.setContentType("application/json;charset=utf-8");
+                    response.getWriter().write("{\"code\":401,\"message\":\"该账号已被封禁，请联系管理员\",\"data\":null}");
+                    return;
+                }
+
+                // 3. 校验 Token 版本号 (pv)
+                Long tokenPv = jwtUtils.extractPv(jwt);
+                Long dbPv = 1L;
+                if (userDetails instanceof UserDetailsImpl) {
+                    Long userPv = ((UserDetailsImpl) userDetails).getUser().getPv();
+                    if (userPv != null) {
+                        dbPv = userPv;
+                    }
+                }
+
+                if (tokenPv == null || !tokenPv.equals(dbPv)) {
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    response.setContentType("application/json;charset=utf-8");
+                    response.getWriter().write("{\"code\":401,\"message\":\"登录凭证已失效，请重新登录\",\"data\":null}");
+                    return;
+                }
 
                 // 验证 Token 是否有效
                 if (jwtUtils.isTokenValid(jwt, userDetails)) {

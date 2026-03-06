@@ -40,4 +40,19 @@ public interface UserService extends IService<User> {
      * @return 包含新 Token 的认证响应
      */
     AuthResponse refreshToken(String refreshToken);
+
+    /**
+     * 退出登录
+     * 
+     * @param accessToken 当前的 Access Token
+     * @param refreshToken 请求退出的 Token
+     */
+    void logout(String accessToken, String refreshToken);
+
+    /**
+     * 修改密码
+     * 
+     * @param request 修改密码请求
+     */
+    void changePassword(com.spark.security.dto.ChangePasswordRequest request);
 }

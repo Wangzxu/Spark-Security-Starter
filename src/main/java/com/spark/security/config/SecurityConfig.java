@@ -33,7 +33,7 @@ public class SecurityConfig {
         http
             .csrf(AbstractHttpConfigurer::disable) // 禁用 CSRF
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/auth/**").permitAll() // 放行登录和注册接口
+                .requestMatchers("/api/auth/**", "/api/test/public").permitAll() // 放行登录、注册接口和公共测试接口
                 .anyRequest().authenticated() // 其他所有接口需要认证
             )
             .sessionManagement(session -> session
