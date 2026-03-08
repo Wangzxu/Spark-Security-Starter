@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS `sys_user` (
   `password` varchar(128) NOT NULL COMMENT '密码',
   `nickname` varchar(64) DEFAULT NULL COMMENT '昵称',
   `status` tinyint(4) DEFAULT '1' COMMENT '状态：1正常，0禁用',
+  `pv` bigint(20) DEFAULT '1' COMMENT '版本号',
   `create_time` datetime DEFAULT NULL COMMENT '创建时间',
   `update_time` datetime DEFAULT NULL COMMENT '更新时间',
   PRIMARY KEY (`id`),
