@@ -11,7 +11,10 @@
 
 ### 2. 多重安全拦截防线
 在底层的 `JwtAuthenticationFilter` 中，系统构建了严密的三道拦截防线：
-1.  **黑名单校验 (Token Blacklist)**：结合 Redis 实现的黑名单机制。登出或被主动拉黑的 AccessToken 会被记录在此，即使 Token 尚未过期，也会被直接阻断。
+1.  **黑名单校验 (Token Blacklist)**：结合 **布隆过滤器 (Bloom Filter)** 与 Redis 实现的高效黑名单机制。
+    *   **第一道防线**：请求到达时，首先通过布隆过滤器快速判断 Token 是否可能在黑名单中。若布隆过滤器判断不存在，则直接放行，无需查询 Redis，极大减轻了缓存压力。
+    *   **第二道防线**：若布隆过滤器判断可能存在（存在误判率），则进一步查询 Redis 进行二次确认，确保拦截的准确性。
+    *   **自动维护 (Double Buffering)**：系统采用双缓冲机制（Double Buffering）进行布隆过滤器的自动刷新。在重建过滤器时，先在临时过滤器中加载数据，完成后原子性地替换旧过滤器，确保在刷新期间黑名单拦截功能零停机，杜绝安全空窗期。
 2.  **封禁状态校验 (Account Status)**：每次受保护请求都会检查用户的最新状态（`status`），一旦管理员将用户设为禁用（`0`），用户当前的请求会被立即拒绝。
 3.  **版本号强制下线机制 (Token PV)**：巧妙地利用 `pv`（Password Version）字段。用户的每次关键变更（如修改密码）都会导致数据库中 `pv` 的自增。由于签发的 AccessToken 载荷（Payload）中绑定了旧的 `pv`，一旦校验发现与数据库不一致，Token 将立刻失效。这提供了一种极其优雅的“全设备强制下线”能力。
 
@@ -32,6 +35,7 @@
 *   MyBatis-Plus 3.5.x
 *   jjwt 0.11.5
 *   Redis (Spring Data Redis)
+*   Redisson (Bloom Filter)
 *   MySQL 8.0
 
 **前端 (Frontend)**
@@ -86,6 +90,7 @@
 除了常规的 `spring-boot-starter-web` 外，你需要引入以下关键依赖：
 *   `spring-boot-starter-security`: Spring Security 核心。
 *   `spring-boot-starter-data-redis`: 用于存储 RefreshToken 和黑名单。
+*   `redisson-spring-boot-starter`: 用于实现布隆过滤器。
 *   `jjwt-api`, `jjwt-impl`, `jjwt-jackson`: JSON Web Token 的生成与解析。
 *   `mybatis-plus-spring-boot3-starter`: 数据库操作（可替换为你熟悉的 ORM）。
 
@@ -111,7 +116,9 @@
 ### 5. 自定义认证过滤器 (JwtAuthenticationFilter)
 这是整个架构的心脏，你需要在这个 Filter 的 `doFilterInternal` 中实现以下逻辑：
 1.  **提取 Token**：从 `Authorization` Header 中提取 `Bearer ` 后的 Token。
-2.  **黑名单校验**：去 Redis 查询该 Token 是否存在于黑名单中，如果在，直接返回 401。
+2.  **黑名单校验**：
+    *   先查布隆过滤器，若不存在直接放行。
+    *   若存在，再去 Redis 查询该 Token 是否存在于黑名单中，如果在，直接返回 401。
 3.  **解析 Token**：提取 `username` 并查询数据库（或缓存）获取当前 `UserDetails`。
 4.  **状态校验**：检查用户 `status` 是否被禁用。
 5.  **版本号校验**：提取 Token 中的 `pv`，与数据库中查出的最新 `pv` 比对，若不一致则判定 Token 失效（已强制下线）。
@@ -121,7 +128,7 @@
 ### 6. 核心业务逻辑
 *   **登录**：校验密码 -> 查询/初始化用户 `pv` -> 生成双 Token -> 将 RefreshToken 存入 Redis -> 返回双 Token 给前端。
 *   **无感刷新**：接收 RefreshToken -> 校验其是否与 Redis 中存储的一致 -> 重新生成双 Token 并覆盖 Redis -> 返回新 Token。
-*   **登出**：接收当前 AccessToken 和 RefreshToken -> 从 Redis 删除 RefreshToken -> 将 AccessToken 加入 Redis 黑名单并设置 TTL 为其剩余有效期。
+*   **登出**：接收当前 AccessToken 和 RefreshToken -> 从 Redis 删除 RefreshToken -> 将 AccessToken 加入 Redis 黑名单并设置 TTL 为其剩余有效期 -> 同步加入布隆过滤器。
 *   **修改密码/踢人**：修改密码逻辑 -> 将数据库用户 `pv` 增加 -> 删除 Redis 中的 RefreshToken。
 
 ### 7. 前端 Axios 拦截器适配
@@ -167,6 +174,10 @@ mybatis-plus:
   global-config:
     db-config:
       id-type: auto # 数据库主键自增策略
+
+bloom-filter:
+  expected-insertions: 1000 # 期望插入数量
+  false-probability: 0.01   # 误判率
 
 jwt:
   # 务必修改为一个足够复杂且至少长度为 256-bit 的 Base64 编码密钥！

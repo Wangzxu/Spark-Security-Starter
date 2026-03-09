@@ -13,4 +13,11 @@ public interface BlacklistService {
      * @param username 需要被封禁的用户名
      */
     void banUser(String username);
+
+    /**
+     * 检查 Token 是否在黑名单中
+     * @param token 需要检查的 JWT
+     * @return 是否被封禁
+     */
+    boolean isTokenBanned(String token);
 }

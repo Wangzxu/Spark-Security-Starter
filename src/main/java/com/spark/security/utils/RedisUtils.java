@@ -97,6 +97,18 @@ public class RedisUtils {
         }
     }
 
+    /**
+     * 获取符合条件的 key
+     */
+    public Collection<String> keys(String pattern) {
+        try {
+            return redisTemplate.keys(buildKey(pattern));
+        } catch (Exception e) {
+            log.error("Redis keys 异常，pattern: {}", pattern, e);
+            return null;
+        }
+    }
+
     // ============================ String（字符串操作）=============================
 
     /**
