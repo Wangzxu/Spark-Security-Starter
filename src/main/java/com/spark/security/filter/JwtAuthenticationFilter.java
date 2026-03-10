@@ -1,8 +1,8 @@
 package com.spark.security.filter;
 
 import com.spark.security.security.UserDetailsImpl;
+import com.spark.security.service.BlacklistService;
 import com.spark.security.utils.JwtUtils;
-import com.spark.security.utils.RedisUtils;
 import com.spark.security.utils.UserContext;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -26,7 +26,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtUtils jwtUtils;
     private final UserDetailsService userDetailsService;
-    private final RedisUtils redisUtils;
+    private final BlacklistService blacklistService;
 
     @Override
     protected void doFilterInternal(
@@ -48,7 +48,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         jwt = authHeader.substring(7);
 
         // 1. 检查 Token 是否在黑名单中
-        if (redisUtils.hasKey("blacklist:token:" + jwt)) {
+        if (blacklistService.isTokenBanned(jwt)) {
             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
             response.setContentType("application/json;charset=utf-8");
             response.getWriter().write("{\"code\":401,\"message\":\"此Token已被拉黑，请重新登录\",\"data\":null}");

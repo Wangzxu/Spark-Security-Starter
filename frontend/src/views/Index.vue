@@ -59,6 +59,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import request from '../utils/request'
+import Cookies from 'js-cookie'
 
 const router = useRouter()
 const username = ref('User')
@@ -136,7 +137,7 @@ const testProtected = async () => {
 
 const handleLogout = async () => {
   try {
-    const refreshToken = localStorage.getItem('refreshToken')
+    const refreshToken = Cookies.get('refreshToken')
     if (refreshToken) {
       await request.post('/auth/logout', { refreshToken })
     }
@@ -149,7 +150,7 @@ const handleLogout = async () => {
 
 const clearAuthAndRedirect = () => {
   localStorage.removeItem('accessToken')
-  localStorage.removeItem('refreshToken')
+  Cookies.remove('refreshToken')
   localStorage.removeItem('user')
   ElMessage.success('Logged out successfully')
   router.push('/login')
@@ -175,7 +176,7 @@ const handleChangePassword = async () => {
           ElMessage.success('Password changed successfully, please login again')
           changePwdDialogVisible.value = false
           // Send logout request to backend as well to be safe, then clear local
-          const refreshToken = localStorage.getItem('refreshToken')
+          const refreshToken = Cookies.get('refreshToken')
           if (refreshToken) {
             await request.post('/auth/logout', { refreshToken }).catch(() => {})
           }

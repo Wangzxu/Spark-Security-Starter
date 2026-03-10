@@ -13,6 +13,7 @@ import java.security.Key;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.Function;
 
 @Component
@@ -30,6 +31,10 @@ public class JwtUtils {
 
     public String extractUsername(String token) {
         return extractClaim(token, Claims::getSubject);
+    }
+
+    public String extractJti(String token) {
+        return extractClaim(token, Claims::getId);
     }
 
     public <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
@@ -61,6 +66,7 @@ public class JwtUtils {
         return Jwts.builder()
                 .setClaims(extraClaims)
                 .setSubject(userDetails.getUsername())
+                .setId(UUID.randomUUID().toString())
                 .setIssuedAt(new Date(System.currentTimeMillis()))
                 .setExpiration(new Date(System.currentTimeMillis() + expiration))
                 .signWith(getSignInKey(), SignatureAlgorithm.HS256)

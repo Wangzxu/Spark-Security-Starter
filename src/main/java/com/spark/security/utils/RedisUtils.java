@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -213,6 +214,44 @@ public class RedisUtils {
             redisTemplate.opsForHash().delete(buildKey(key), item);
         } catch (Exception e) {
             log.error("Redis hdel 异常，key: {}, item: {}", key, Arrays.toString(item), e);
+        }
+    }
+
+    // ============================ Set（集合操作）=============================
+
+    /**
+     * 根据key获取Set中的所有值
+     */
+    public Set<Object> sGet(String key) {
+        try {
+            return redisTemplate.opsForSet().members(buildKey(key));
+        } catch (Exception e) {
+            log.error("Redis sGet 异常，key: {}", key, e);
+            return null;
+        }
+    }
+
+    /**
+     * 将数据放入set缓存
+     */
+    public long sSet(String key, Object... values) {
+        try {
+            return redisTemplate.opsForSet().add(buildKey(key), values);
+        } catch (Exception e) {
+            log.error("Redis sSet 异常，key: {}", key, e);
+            return 0;
+        }
+    }
+
+    /**
+     * 移除值为value的
+     */
+    public long setRemove(String key, Object... values) {
+        try {
+            return redisTemplate.opsForSet().remove(buildKey(key), values);
+        } catch (Exception e) {
+            log.error("Redis setRemove 异常，key: {}", key, e);
+            return 0;
         }
     }
 }

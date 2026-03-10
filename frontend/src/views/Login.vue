@@ -29,6 +29,7 @@ import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import request from '../utils/request'
+import Cookies from 'js-cookie'
 
 const router = useRouter()
 const loginFormRef = ref(null)
@@ -60,7 +61,7 @@ const handleLogin = async () => {
         if (res.code === 200) {
           ElMessage.success('Login successful')
           localStorage.setItem('accessToken', res.data.accessToken)
-          localStorage.setItem('refreshToken', res.data.refreshToken)
+          Cookies.set('refreshToken', res.data.refreshToken, { expires: 7 })
           // Store user info if necessary
           if (res.data.user) {
              localStorage.setItem('user', JSON.stringify(res.data.user))

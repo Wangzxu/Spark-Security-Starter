@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Date;
 import java.util.List;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -31,18 +32,24 @@ public class BlacklistServiceImpl implements BlacklistService {
     public void banToken(String token) {
         log.info("开始处理封禁 Token 请求");
         try {
+            String jti = jwtUtils.extractJti(token);
+            if (jti == null) {
+                log.warn("无法提取 Token 的 JTI，跳过封禁");
+                return;
+            }
+
             Date expirationDate = jwtUtils.extractExpiration(token);
             long expireTimeSec = (expirationDate.getTime() - System.currentTimeMillis()) / 1000;
 
             if (expireTimeSec > 0) {
-                // 以 token 本身或其 hash 作为 key 存入 Redis
-                String redisKey = "blacklist:token:" + token;
+                // 以 JTI 作为 key 存入 Redis
+                String redisKey = "blacklist:token:" + jti;
                 redisUtils.set(redisKey, "banned", expireTimeSec);
                 
                 // 同时加入布隆过滤器
-                bloomFilterUtils.add(token);
+                bloomFilterUtils.add(jti);
                 
-                log.info("Token 已加入黑名单和布隆过滤器，将在 {} 秒后从 Redis 清除", expireTimeSec);
+                log.info("Token JTI [{}] 已加入黑名单和布隆过滤器，将在 {} 秒后从 Redis 清除", jti, expireTimeSec);
             }
         } catch (Exception e) {
             log.warn("加入黑名单失败，Token 可能已过期或无效: {}", e.getMessage());
@@ -66,23 +73,35 @@ public class BlacklistServiceImpl implements BlacklistService {
             return;
         }
 
-        // 2. 删除 Redis 中的 Refresh Token，让用户无法再换取新的 Access Token
-        String redisKey = "refresh_token:" + username;
-        redisUtils.del(redisKey);
-        log.info("已删除用户 [{}] 的 Refresh Token，阻止后续刷新", username);
+        // 2. 删除 Redis 中的所有 Refresh Token，让用户无法再换取新的 Access Token
+        String userTokensKey = "user_tokens:" + username;
+        Set<Object> jtis = redisUtils.sGet(userTokensKey);
+        if (jtis != null && !jtis.isEmpty()) {
+            for (Object jtiObj : jtis) {
+                String jti = (String) jtiObj;
+                redisUtils.del("refresh_token:" + jti);
+            }
+            redisUtils.del(userTokensKey);
+            log.info("已删除用户 [{}] 的所有 Refresh Token，阻止后续刷新", username);
+        }
     }
 
     @Override
     public boolean isTokenBanned(String token) {
+        String jti = jwtUtils.extractJti(token);
+        if (jti == null) {
+            return false;
+        }
+
         // 1. 首先检查布隆过滤器
-        if (!bloomFilterUtils.contains(token)) {
+        if (!bloomFilterUtils.contains(jti)) {
             // 布隆过滤器说不在，那就肯定不在
             return false;
         }
 
         // 2. 布隆过滤器说在（可能误判），进一步去 Redis 确认
-        log.debug("布隆过滤器命中，正在前往 Redis 确认: {}", token);
-        return redisUtils.hasKey("blacklist:token:" + token);
+        log.debug("布隆过滤器命中，正在前往 Redis 确认 JTI: {}", jti);
+        return redisUtils.hasKey("blacklist:token:" + jti);
     }
 
     /**
@@ -93,22 +112,22 @@ public class BlacklistServiceImpl implements BlacklistService {
     public void refreshBloomFilter() {
         log.info("开始定时刷新布隆过滤器...");
 
-        // 从 Redis 重新加载黑名单 Token
+        // 从 Redis 重新加载黑名单 Token JTI
         Collection<String> keys = redisUtils.keys("blacklist:token:*");
-        List<String> tokens = new ArrayList<>();
+        List<String> jtis = new ArrayList<>();
         if (keys != null && !keys.isEmpty()) {
             for (String key : keys) {
-                // 提取 Token
+                // 提取 JTI
                 String[] parts = key.split("blacklist:token:");
                 if (parts.length > 1) {
-                    tokens.add(parts[1]);
+                    jtis.add(parts[1]);
                 }
             }
         }
         
         // 调用工具类进行刷新
-        bloomFilterUtils.refresh(tokens);
+        bloomFilterUtils.refresh(jtis);
         
-        log.info("布隆过滤器刷新完成，已重新加载 {} 个 Token", tokens.size());
+        log.info("access黑名单布隆过滤器刷新完成，已重新加载 {} 个 Token JTI", jtis.size());
     }
 }

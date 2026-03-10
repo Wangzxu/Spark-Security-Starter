@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
+import Cookies from 'js-cookie'
 
 const request = axios.create({
   baseURL: '/api',
@@ -67,7 +68,7 @@ request.interceptors.response.use(
 function handleUnauthorized(originalConfig) {
   if (!isRefreshing) {
     isRefreshing = true
-    const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY)
+    const refreshToken = Cookies.get(REFRESH_TOKEN_KEY)
     
     if (!refreshToken) {
       isRefreshing = false
@@ -83,7 +84,7 @@ function handleUnauthorized(originalConfig) {
           const newRefreshToken = refreshData.data.refreshToken
           
           localStorage.setItem(ACCESS_TOKEN_KEY, newAccessToken)
-          localStorage.setItem(REFRESH_TOKEN_KEY, newRefreshToken)
+          Cookies.set(REFRESH_TOKEN_KEY, newRefreshToken, { expires: 7 })
           
           // Update the original request's authorization header
           originalConfig.headers.Authorization = `Bearer ${newAccessToken}`
@@ -131,7 +132,7 @@ function redirectToLogin(err = new Error('Unauthorized')) {
   requestsQueue = []
   
   localStorage.removeItem(ACCESS_TOKEN_KEY)
-  localStorage.removeItem(REFRESH_TOKEN_KEY)
+  Cookies.remove(REFRESH_TOKEN_KEY)
   localStorage.removeItem('user')
   window.location.href = '/login'
   return Promise.reject(err)
