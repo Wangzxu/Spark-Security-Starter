@@ -9,6 +9,13 @@ public interface BlacklistService {
     void banToken(String token);
 
     /**
+     * 直接将 JTI 加入黑名单
+     * @param jti 需要被封禁的 Token ID
+     * @param expirationTime 过期时间戳（毫秒）
+     */
+    void banJti(String jti, long expirationTime);
+
+    /**
      * 封禁用户，禁止其后续登录，并使其当前的 Refresh Token 失效
      * @param username 需要被封禁的用户名
      */

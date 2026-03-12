@@ -9,13 +9,9 @@ import com.spark.security.utils.JwtUtils;
 import com.spark.security.utils.RedisUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Date;
-import java.util.List;
 import java.util.Set;
 
 @Slf4j
@@ -39,21 +35,29 @@ public class BlacklistServiceImpl implements BlacklistService {
             }
 
             Date expirationDate = jwtUtils.extractExpiration(token);
-            long expireTimeSec = (expirationDate.getTime() - System.currentTimeMillis()) / 1000;
+            long expireTimeMs = expirationDate.getTime() - System.currentTimeMillis();
 
-            if (expireTimeSec > 0) {
-                // 以 JTI 作为 key 存入 Redis
-                String redisKey = "blacklist:token:" + jti;
-                redisUtils.set(redisKey, "banned", expireTimeSec);
-                
-                // 同时加入布隆过滤器
-                bloomFilterUtils.add(jti);
-                
-                log.info("Token JTI [{}] 已加入黑名单和布隆过滤器，将在 {} 秒后从 Redis 清除", jti, expireTimeSec);
+            if (expireTimeMs > 0) {
+                banJti(jti, expireTimeMs);
             }
         } catch (Exception e) {
             log.warn("加入黑名单失败，Token 可能已过期或无效: {}", e.getMessage());
         }
+    }
+
+    @Override
+    public void banJti(String jti, long expirationTimeMs) {
+        if (expirationTimeMs <= 0) {
+            return;
+        }
+        // 以 JTI 作为 key 存入 Redis
+        String redisKey = "blacklist:token:" + jti;
+        redisUtils.set(redisKey, "banned", expirationTimeMs / 1000);
+
+        // 同时加入布隆过滤器
+        bloomFilterUtils.add(jti);
+
+        log.info("Token JTI [{}] 已加入黑名单和布隆过滤器，将在 {} 秒后从 Redis 清除", jti, expirationTimeMs / 1000);
     }
 
     @Override
@@ -63,7 +67,7 @@ public class BlacklistServiceImpl implements BlacklistService {
         // 1. 修改数据库中用户的状态为 0 (禁用)
         LambdaUpdateWrapper<User> updateWrapper = new LambdaUpdateWrapper<>();
         updateWrapper.eq(User::getUsername, username)
-                     .set(User::getStatus, 0);
+                .set(User::getStatus, 0);
         int updated = userMapper.update(null, updateWrapper);
 
         if (updated > 0) {
@@ -102,32 +106,5 @@ public class BlacklistServiceImpl implements BlacklistService {
         // 2. 布隆过滤器说在（可能误判），进一步去 Redis 确认
         log.debug("布隆过滤器命中，正在前往 Redis 确认 JTI: {}", jti);
         return redisUtils.hasKey("blacklist:token:" + jti);
-    }
-
-    /**
-     * 定时刷新布隆过滤器，降低误判率
-     * 采用双缓冲机制 (Double Buffering) 避免刷新期间的空窗期
-     */
-    @Scheduled(cron = "0 0/30 * * * ?")
-    public void refreshBloomFilter() {
-        log.info("开始定时刷新布隆过滤器...");
-
-        // 从 Redis 重新加载黑名单 Token JTI
-        Collection<String> keys = redisUtils.keys("blacklist:token:*");
-        List<String> jtis = new ArrayList<>();
-        if (keys != null && !keys.isEmpty()) {
-            for (String key : keys) {
-                // 提取 JTI
-                String[] parts = key.split("blacklist:token:");
-                if (parts.length > 1) {
-                    jtis.add(parts[1]);
-                }
-            }
-        }
-        
-        // 调用工具类进行刷新
-        bloomFilterUtils.refresh(jtis);
-        
-        log.info("access黑名单布隆过滤器刷新完成，已重新加载 {} 个 Token JTI", jtis.size());
     }
 }

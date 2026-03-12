@@ -52,4 +52,8 @@ public class UserDetailsImpl implements UserDetails {
     public boolean isEnabled() {
         return user.getStatus() != null && user.getStatus() == 1;
     }
+
+    public Long getId() {
+        return user.getId();
+    }
 }

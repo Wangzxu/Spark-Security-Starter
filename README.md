@@ -10,13 +10,16 @@
 *   **RefreshToken (长效)**：默认 7 天过期，保存在服务端的 Redis 中。当 AccessToken 过期时，前端通过它进行无感刷新，换取新的一对 Token，极大提升用户体验。
 
 ### 2. 多重安全拦截防线
-在底层的 `JwtAuthenticationFilter` 中，系统构建了严密的三道拦截防线：
-1.  **黑名单校验 (Token Blacklist)**：结合 **布隆过滤器 (Bloom Filter)** 与 Redis 实现的高效黑名单机制。
-    *   **第一道防线**：请求到达时，首先通过布隆过滤器快速判断 Token 是否可能在黑名单中。若布隆过滤器判断不存在，则直接放行，无需查询 Redis，极大减轻了缓存压力。
-    *   **第二道防线**：若布隆过滤器判断可能存在（存在误判率），则进一步查询 Redis 进行二次确认，确保拦截的准确性。
-    *   **自动维护 (Double Buffering)**：系统采用双缓冲机制（Double Buffering）进行布隆过滤器的自动刷新。在重建过滤器时，先在临时过滤器中加载数据，完成后原子性地替换旧过滤器，确保在刷新期间黑名单拦截功能零停机，杜绝安全空窗期。
-2.  **封禁状态校验 (Account Status)**：每次受保护请求都会检查用户的最新状态（`status`），一旦管理员将用户设为禁用（`0`），用户当前的请求会被立即拒绝。
-3.  **版本号强制下线机制 (Token PV)**：巧妙地利用 `pv`（Password Version）字段。用户的每次关键变更（如修改密码）都会导致数据库中 `pv` 的自增。由于签发的 AccessToken 载荷（Payload）中绑定了旧的 `pv`，一旦校验发现与数据库不一致，Token 将立刻失效。这提供了一种极其优雅的“全设备强制下线”能力。
+在底层的 `JwtAuthenticationFilter` 中，系统构建了严密的多道拦截防线：
+1.  **访问令牌黑名单校验 (Access Token Blacklist)**：结合 **布隆过滤器 (Bloom Filter)** 与 Redis 实现的高效黑名单机制。
+    *   **第一道防线**：用户登出时，其访问令牌的 `jti`（JWT ID）会被加入布隆过滤器。请求到达时，首先通过布隆过滤器快速判断 `jti` 是否可能在黑名单中。若不存在，则直接放行，无需查询 Redis。
+    *   **第二道防线**：若布隆过滤器判断可能存在，则进一步查询 Redis 进行二次确认，确保拦截的准确性。
+2.  **刷新令牌白名单校验 (Refresh Token Whitelist)**：为了快速过滤掉伪造或已失效的刷新令牌，系统同样采用 **布隆过滤器 + Redis** 的双重校验。
+    *   **第一道防线**：每次刷新令牌的请求到达时，先检查其 `jti` 是否存在于刷新令牌的布隆过滤器（白名单）中。如果不存在，意味着该令牌从未被系统签发或已失效，请求将被立即拒绝。
+    *   **第二道防线**：通过布隆过滤器后，再查询 Redis 验证该 `jti` 是否真实存在，完成最终校验。
+3.  **封禁状态校验 (Account Status)**：每次受保护请求都会检查用户的最新状态（`status`），一旦管理员将用户设为禁用（`0`），用户当前的请求会被立即拒绝。
+4.  **版本号强制下线机制 (Token PV)**：巧妙地利用 `pv`（Password Version）字段。用户的每次关键变更（如修改密码）都会导致数据库中 `pv` 的自增。由于签发的 AccessToken 载荷（Payload）中绑定了旧的 `pv`，一旦校验发现与数据库不一致，Token 将立刻失效。这提供了一种极其优雅的“全设备强制下线”能力。
+5.  **过滤器自动维护 (Double Buffering)**：系统采用双缓冲机制（Double Buffering）对黑名单和白名单的布隆过滤器进行自动刷新。在重建过滤器时，先在临时过滤器中加载数据，完成后原子性地替换旧过滤器，确保在刷新期间拦截功能零停机，杜绝安全空窗期。
 
 ### 3. 上下文解耦
 *   **UserContext (ThreadLocal)**：在认证成功后，系统会将解析出的用户信息封装存入 `ThreadLocal` 中。后续的 Service 业务层可以随时通过 `UserContext.getUserId()` 零侵入地获取当前操作人，无需层层传递参数。
@@ -50,22 +53,22 @@
 ### 1. 登录流程
 1. 前端发送用户名和密码。
 2. 后端验证通过，初始化该用户的 `pv`（版本号）。
-3. 签发含有 `pv` 的 `AccessToken` 和常规的 `RefreshToken`。
-4. 将 `RefreshToken` 存入 Redis (`refresh_token:username`)。
+3. 签发含有 `jti` 和 `pv` 的 `AccessToken` 以及含有 `jti` 的 `RefreshToken`。
+4. 将 `RefreshToken` 的 `jti` 作为 Key、`username` 作为 Value 存入 Redis (`refresh_token:{jti}` -> `username`)，并将其 `jti` 加入白名单布隆过滤器。
 5. 前端保存双 Token。
 
 ### 2. 无感刷新流程
 1. 前端请求受保护接口，后端抛出 `ExpiredJwtException`。
 2. 后端捕获异常，优雅返回 `401` JSON 响应。
 3. 前端拦截器捕获 `401`，锁定请求队列，发起 `/api/auth/refresh` 请求。
-4. 后端验证传来的 `RefreshToken` 是否与 Redis 中的匹配。
-5. 验证成功，颁发新 Token 对，更新 Redis；前端拿到新 Token，重放刚才的业务请求。
+4. 后端首先通过白名单布隆过滤器检查 `RefreshToken` 的 `jti`，快速过滤无效令牌。
+5. 验证通过后，再查询 Redis 中是否存在 `refresh_token:{jti}`。
+6. 验证成功，颁发新 Token 对，更新 Redis 和白名单布隆过滤器；前端拿到新 Token，重放刚才的业务请求。
 
 ### 3. 修改密码流程 (强制下线验证)
 1. 前端请求 `/api/user/change-password`。
 2. 后端校验旧密码成功后，更新新密码，并将数据库中的 `pv` 字段 `+1`。
-3. 后端删除 Redis 中的 `RefreshToken`。
-4. 此时，该用户在所有其他设备上的 `AccessToken` 内含的是旧的 `pv`，再次请求时会被过滤器拦截失效；同时因为 Redis 里的 `RefreshToken` 被删，它们也无法再触发无感刷新，从而实现了**真·全设备强制下线**。
+3. **被动失效机制**：此时，该用户在所有其他设备上的 `AccessToken` 内含的是旧的 `pv`。当它们再次请求时，`JwtAuthenticationFilter` 会发现 `AccessToken` 的 `pv` 与数据库的最新 `pv` 不匹配，从而判定令牌失效，强制用户重新登录。由于无法获取新的 `AccessToken`，旧的 `RefreshToken` 也失去了作用，从而实现了**真·全设备强制下线**。
 
 ## 🚀 快速启动
 
@@ -76,7 +79,7 @@
     *   启动本地的 MySQL 和 Redis 服务。
     *   确认 `application.yml` 中的数据源及 Redis 连接信息正确。
 3.  **启动后端**
-    *   运行 `SparkSecurityApplication.java`。后端服务默认跑在 `8080` 端口。
+    *   运行 `SparkSecurityStarterApplication.java`。后端服务默认跑在 `8080` 端口。
 4.  **启动前端**
     *   进入 `frontend` 目录。
     *   执行 `npm install`。
@@ -103,41 +106,46 @@
 
 ### 3. JWT 工具类封装
 编写一个 `JwtUtils`，实现以下核心功能：
-*   `generateToken`: 生成短效 AccessToken，并将用户的 `pv` 放入 Claims（载荷）中。
-*   `generateRefreshToken`: 生成长效 RefreshToken。
-*   `extractUsername` / `extractPv` / `extractExpiration`: 从 Token 中解析关键信息。
+*   `generateToken`: 生成短效 AccessToken，并将用户的 `pv` 和一个唯一的 `jti` 放入 Claims 中。
+*   `generateRefreshToken`: 生成长效 RefreshToken，并包含唯一的 `jti`。
+*   `extractUsername` / `extractPv` / `extractJti`: 从 Token 中解析关键信息。
 *   `isTokenValid`: 验证 Token 签名和是否过期。
 
 ### 4. 核心安全配置 (SecurityConfig)
-*   配置 `SecurityFilterChain`，禁用 CSRF 和 Session（`SessionCreationPolicy.STATELESS`），因为我们完全依赖 JWT。
-*   配置白名单（如 `/api/auth/**` 等登录注册接口），其余接口全部拦截。
+*   配置 `SecurityFilterChain`，禁用 CSRF 和 Session（`SessionCreationPolicy.STATELESS`）。
+*   配置白名单（如 `/api/auth/**`），其余接口全部拦截。
 *   将自定义的 `JwtAuthenticationFilter` 添加到 `UsernamePasswordAuthenticationFilter` 之前。
 
 ### 5. 自定义认证过滤器 (JwtAuthenticationFilter)
 这是整个架构的心脏，你需要在这个 Filter 的 `doFilterInternal` 中实现以下逻辑：
 1.  **提取 Token**：从 `Authorization` Header 中提取 `Bearer ` 后的 Token。
 2.  **黑名单校验**：
-    *   先查布隆过滤器，若不存在直接放行。
-    *   若存在，再去 Redis 查询该 Token 是否存在于黑名单中，如果在，直接返回 401。
+    *   提取 `AccessToken` 的 `jti`。
+    *   先查布隆过滤器，若不存在直接进行下一步。
+    *   若存在，再去 Redis 查询该 `jti` 是否存在于黑名单中，如果在，直接返回 401。
 3.  **解析 Token**：提取 `username` 并查询数据库（或缓存）获取当前 `UserDetails`。
 4.  **状态校验**：检查用户 `status` 是否被禁用。
-5.  **版本号校验**：提取 Token 中的 `pv`，与数据库中查出的最新 `pv` 比对，若不一致则判定 Token 失效（已强制下线）。
-6.  **上下文注入**：校验全部通过后，将用户信息塞入 `SecurityContextHolder` 和自定义的 `ThreadLocal`（如 `UserContext`）中，最后放行（`filterChain.doFilter`）。
-7.  **异常捕获**：务必使用 `try-catch` 捕获 `ExpiredJwtException`，以便返回优雅的 401 JSON 响应，触发前端的无感刷新。并且在 `finally` 块中清理 `ThreadLocal` 防内存泄漏。
+5.  **版本号校验**：提取 Token 中的 `pv`，与数据库中查出的最新 `pv` 比对，若不一致则判定 Token 失效。
+6.  **上下文注入**：校验全部通过后，将用户信息塞入 `SecurityContextHolder` 和自定义的 `ThreadLocal` 中，最后放行。
+7.  **异常捕获**：务必使用 `try-catch` 捕获 `ExpiredJwtException`，以便返回优雅的 401 JSON 响应，触发前端的无感刷新。并在 `finally` 块中清理 `ThreadLocal`。
 
 ### 6. 核心业务逻辑
-*   **登录**：校验密码 -> 查询/初始化用户 `pv` -> 生成双 Token -> 将 RefreshToken 存入 Redis -> 返回双 Token 给前端。
-*   **无感刷新**：接收 RefreshToken -> 校验其是否与 Redis 中存储的一致 -> 重新生成双 Token 并覆盖 Redis -> 返回新 Token。
-*   **登出**：接收当前 AccessToken 和 RefreshToken -> 从 Redis 删除 RefreshToken -> 将 AccessToken 加入 Redis 黑名单并设置 TTL 为其剩余有效期 -> 同步加入布隆过滤器。
-*   **修改密码/踢人**：修改密码逻辑 -> 将数据库用户 `pv` 增加 -> 删除 Redis 中的 RefreshToken。
+*   **登录**：校验密码 -> 查询/初始化用户 `pv` -> 生成双 Token -> 将 RefreshToken 的 `jti` 存入 Redis 和白名单布隆过滤器 -> 返回双 Token。
+*   **无感刷新**：接收 RefreshToken -> 校验其 `jti` 是否在白名单布隆过滤器和 Redis 中 -> 重新生成双 Token 并更新 Redis -> 返回新 Token。
+*   **登出**：接收当前 AccessToken -> 从 Redis 删除 RefreshToken 的 `jti` -> 将 AccessToken 的 `jti` 加入 Redis 黑名单和黑名单布隆过滤器。
+*   **修改密码/踢人**：修改密码逻辑 -> 将数据库用户 `pv` 增加。
 
-### 7. 前端 Axios 拦截器适配
+### 7. 定时任务服务 (ScheduledTaskService)
+*   创建一个带有 `@Scheduled` 注解的服务，用于定期执行维护任务。
+*   **刷新布隆过滤器**：定时从 Redis 中读取所有黑名单和白名单的 `jti`，并使用双缓冲机制重建布隆过滤器，以保证其长期准确性。
+
+### 8. 前端 Axios 拦截器适配
 *   **请求拦截**：在 Header 中自动带上 `Authorization: Bearer <AccessToken>`。
 *   **响应拦截**：
     *   捕获 `401` 状态码。
     *   利用一个布尔变量（如 `isRefreshing`）防止并发请求导致多次刷新。
-    *   挂起后续 401 请求（放入队列），携带本地的 RefreshToken 调用后端的 `/refresh` 接口。
-    *   刷新成功后，更新本地 Token，并重放队列中的请求。如果刷新失败，则强制跳转到登录页。
+    *   挂起后续 401 请求，携带本地的 RefreshToken 调用后端的 `/refresh` 接口。
+    *   刷新成功后，更新本地 Token，并重放挂起的请求。如果刷新失败，则强制跳转到登录页。
 
 ## 📝 配置文件说明 (application.yml)
 
