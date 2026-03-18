@@ -2,6 +2,8 @@ server:
   port: 8080
 
 spring:
+  application:
+    name: spark-security
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: jdbc:mysql://localhost:3306/spark_security?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
@@ -11,7 +13,8 @@ spring:
     redis:
       host: localhost
       port: 6379
-      password:
+  redis:
+    key-pre: ${spring.application.name}:auth
 
 mybatis-plus:
   configuration:
@@ -23,4 +26,13 @@ mybatis-plus:
 
 jwt:
   secret: 404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970
-  expiration: 86400000 # 24 hours
+  expiration: 1810000  # 1800000 30 minutes (in ms)
+  refresh-expiration: 604800000 # 7 days (in ms)
+
+bloom-filter:
+  expected-insertions: 1000
+  false-probability: 0.01
+
+logging:
+  level:
+    com.spark.security: debug

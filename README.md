@@ -1,5 +1,7 @@
 # Spark Security Starter
 
+![系统架构图](images/系统架构图.jpg)
+
 `Spark Security Starter` 是一个基于 Spring Boot 3 + Spring Security 6 + Vue 3 的轻量级、高安全性的前后端分离认证脚手架。它实现了企业级项目中常见的 JWT 双 Token 机制、无感刷新、黑名单拦截、版本号强制下线等高级安全特性。
 
 ## 🌟 核心特性
@@ -50,7 +52,12 @@
 
 ## 📂 核心流程时序简述
 
+![工作流程图](images/工作流程图.jpg)
+
 ### 1. 登录流程
+
+![登录与双token签发时序图](images/登录与双token签发时序图.jpg)
+
 1. 前端发送用户名和密码。
 2. 后端验证通过，初始化该用户的 `pv`（版本号）。
 3. 签发含有 `jti` 和 `pv` 的 `AccessToken` 以及含有 `jti` 的 `RefreshToken`。
@@ -58,6 +65,9 @@
 5. 前端保存双 Token。
 
 ### 2. 无感刷新流程
+
+![无感知刷新图](images/无感知刷新图.jpg)
+
 1. 前端请求受保护接口，后端抛出 `ExpiredJwtException`。
 2. 后端捕获异常，优雅返回 `401` JSON 响应。
 3. 前端拦截器捕获 `401`，锁定请求队列，发起 `/api/auth/refresh` 请求。
